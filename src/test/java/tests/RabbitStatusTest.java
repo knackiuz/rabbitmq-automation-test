@@ -79,6 +79,7 @@ public class RabbitStatusTest {
             "getting messages from the queue, check and delete the messages by tag")
     void testJsonMessageProcessing() throws Exception{
         ObjectMapper mapper = new ObjectMapper();
+
         // Test data
         Order order = new Order();
         order.setId(12345);
