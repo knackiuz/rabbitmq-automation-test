@@ -15,7 +15,10 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import java.time.Duration;
 
-// 1. Убрали @Testcontainers, так как теперь работаем через облако
+/**
+ * Integration test verifying End-to-End flow from REST API to Cloud RabbitMQ.
+ * Docker is not required as it uses a remote CloudAMQP instance.
+ */
 @SpringBootTest(classes = org.example.MyApplication.class,
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 public class RabbitIntegrationTest {
@@ -25,12 +28,12 @@ public class RabbitIntegrationTest {
     @LocalServerPort
     private int port;
 
-    // 2. ЗАМЕНИ ЭТУ СТРОКУ на свой реальный URL из панели CloudAMQP
+    // Connection URL for the remote CloudAMQP instance (includes credentials)
     private static final String CLOUD_AMQP_URL = "amqps://wrbhljju:Gt3nhDUT4t9sshJbhbj3jPeKvsbdnOgN@cow.rmq2.cloudamqp.com/wrbhljju";
 
     @DynamicPropertySource
     static void configureProperties(DynamicPropertyRegistry registry) {
-        // Сообщаем Spring Boot приложению, куда слать сообщения
+        // Dynamically configures the Spring Application to point its RabbitTemplate to the cloud broker
         registry.add("spring.rabbitmq.addresses", () -> CLOUD_AMQP_URL);
     }
 
@@ -40,21 +43,23 @@ public class RabbitIntegrationTest {
 
     @BeforeEach
     void setup() throws Exception {
-        // 3. Подключаем сам ТЕСТ к облаку для проверки очереди
+        // Connect the test consumer to CloudAMQP to verify message arrival
         ConnectionFactory factory = new ConnectionFactory();
         factory.setUri(CLOUD_AMQP_URL);
 
         connection = factory.newConnection();
         channel = connection.createChannel();
 
-        // Убедимся, что очередь существует в облаке
+        // Ensure the target queue exists on the remote broker before starting the test
         channel.queueDeclare(QUEUE_NAME, true, false, false, null);
 
+        // Configure RestAssured to point to the locally running Tomcat server
         RestAssured.baseURI = "http://localhost:" + port;
     }
 
     @AfterEach
     void tearDown() throws Exception {
+        // Clean up resources to prevent connection leaks
         if (channel != null && channel.isOpen()) channel.close();
         if (connection != null && connection.isOpen()) connection.close();
     }
@@ -62,11 +67,12 @@ public class RabbitIntegrationTest {
     @Test
     @DisplayName("End-to-End: API -> Cloud RabbitMQ Verification: raise TomCat, send message through TomCatš port, get message from the queue and check content")
     void testApiToRabbitFlow() throws Exception {
+        // Arrange: Prepare test data
         Order order = new Order();
         order.setId(999);
         order.setStatus("ACCEPTED");
 
-        // Act: Отправляем в наш локальный сервис (который перешлет в облако)
+        // Act: Send POST request to the local API endpoint (which then publishes to CloudAMQP)
         RestAssured.given()
                 .contentType("application/json")
                 .body(order)
@@ -77,14 +83,18 @@ public class RabbitIntegrationTest {
 
         logger.info("Sent order to API and expected it in CloudAMQP");
 
-        // Assert: Вычитываем из облака
+        // Assert: Poll the remote queue until the expected message arrives
         Awaitility.await()
-                .atMost(Duration.ofSeconds(15)) // В облаке задержка чуть больше
+                .atMost(Duration.ofSeconds(15)) // Cloud latency requires a longer timeout than local Docker
                 .untilAsserted(() -> {
+                    // Fetch message from the queue with auto-acknowledgement
                     GetResponse response = channel.basicGet(QUEUE_NAME, true);
                     Assertions.assertNotNull(response, "Cloud RabbitMQ queue is empty!");
 
+                    // Deserialize the JSON body back to Order object
                     Order received = mapper.readValue(response.getBody(), Order.class);
+
+                    // Final verification of data integrity
                     Assertions.assertEquals(order.getId(), received.getId());
                     logger.info("Successfully caught message from CloudAMQP!");
                 });
