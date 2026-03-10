@@ -132,4 +132,54 @@ public class RabbitStatusTest {
             logger.info("Message with tag: {} verified and acknowledged.", tag);
         }
     }
+
+    @Test
+    @DisplayName("Test: verify custom headers and message properties")
+    void testMessagePropertiesAndHeaders() throws Exception{
+        String message = "Header test";
+        String correlationId = "test-123-abc";
+
+        // Create custom properties with correlation ID
+        AMQP.BasicProperties properties = new AMQP.BasicProperties().builder().correlationId(correlationId).contentType("text/plain").build();
+
+        channel.basicPublish("", QUEUE_NAME, properties, message.getBytes());
+        logger.info("Sent message with correlation ID {}", correlationId);
+
+        Awaitility.await()
+                .atMost(Duration.ofSeconds(5))
+                .untilAsserted(() -> {
+                    GetResponse response = channel.basicGet(QUEUE_NAME, true);
+                    Assertions.assertNotNull(response);
+
+                    // Verify that metadata (correlation ID) is correct
+                    Assertions.assertEquals(correlationId, response.getProps().getCorrelationId());
+                    logger.info("Correlation ID verified successfully");
+                });
+    }
+
+    @Test
+    @DisplayName("Test: verify message requeue after negative acknowledgement")
+    void testMessageRequeue() throws Exception{
+        String message = "Requeue me";
+
+        channel.basicPublish("", QUEUE_NAME, null, message.getBytes());
+
+        // Get message and reject it with requeue = true
+        GetResponse firstResponse = channel.basicGet(QUEUE_NAME, false); // autoAck: false
+        long tag = firstResponse.getEnvelope().getDeliveryTag();
+
+        // basicNack: tag, multiple: false, requeue: true
+        channel.basicNack(tag, false, true);
+        logger.info("Message with tag {} rejected and send back to queue", tag);
+
+        // Verify the message is back in the queue
+        Awaitility.await()
+                .atMost(Duration.ofSeconds(5))
+                .untilAsserted(() -> {
+                    GetResponse secondResponse = channel.basicGet(QUEUE_NAME, true);
+                    Assertions.assertNotNull(secondResponse, "Message should be back in the queue!");
+                    Assertions.assertEquals(message, new String(secondResponse.getBody()));
+                    logger.info("Message successfully recovered from the queue");
+                });
+    }
 }
