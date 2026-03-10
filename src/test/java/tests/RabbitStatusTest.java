@@ -80,6 +80,7 @@ public class RabbitStatusTest {
     void testJsonMessageProcessing() throws Exception{
         ObjectMapper mapper = new ObjectMapper();
 
+        // Test data
         Order order = new Order();
         order.setId(12345);
         order.setStatus("IN_PROGRESS");
